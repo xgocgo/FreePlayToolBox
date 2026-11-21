@@ -116,7 +116,7 @@ fun DashboardScreen(modifier: Modifier = Modifier) {
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                         )
                         Text(
-                            "v0.6.0 · 免 root",
+                            "v${com.freeplay.toolbox.BuildConfig.VERSION_NAME} · 免 root",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

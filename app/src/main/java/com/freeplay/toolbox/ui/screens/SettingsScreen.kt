@@ -61,7 +61,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             Column {
                 Text("设置", fontSize = 26.sp, style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "玩机工具箱 v0.9.0",
+                    "玩机工具箱 v${com.freeplay.toolbox.BuildConfig.VERSION_NAME}",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 2.dp),
@@ -109,7 +109,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         KsuListItem(
             icon = Icons.Filled.Info,
             title = "版本",
-            subtitle = "v0.9.0 (23) · 免 root，基于 Shizuku / Dhizuku",
+            subtitle = "v${com.freeplay.toolbox.BuildConfig.VERSION_NAME} (${com.freeplay.toolbox.BuildConfig.VERSION_CODE}) · 免 root，基于 Shizuku / Dhizuku",
             tint = NeonCyan,
         )
         KsuListItem(
