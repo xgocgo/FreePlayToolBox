@@ -27,8 +27,8 @@ android {
         applicationId = "com.freeplay.toolbox"
         minSdk = 24
         targetSdk = 34
-        versionCode = 24
-        versionName = "0.10.0"
+        versionCode = 25
+        versionName = "0.10.1"
     }
 
     buildTypes {

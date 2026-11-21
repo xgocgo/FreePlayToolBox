@@ -11,61 +11,113 @@ data class ActiveNotification(
 )
 
 /**
- * 通知管理：
- * - 列出当前活动通知（解析 dumpsys notification）
- * - 按包屏蔽全部通知（AppOps POST_NOTIFICATION）
- * - 隐藏常驻通知：Android 13+ 前台服务通知同样受 POST_NOTIFICATION 控制，
- *   撤销后「正在运行」这类常驻通知不再显示（副作用是该包所有通知一起消失）。
+ * 通知管理。
+ *
+ * 屏蔽通知走两条命令并回读校验：
+ * 1. `cmd appops set <pkg> POST_NOTIFICATION ignore`（Android 13+ 前台服务/常驻通知也受它控制）
+ * 2. `pm revoke <pkg> android.permission.POST_NOTIFICATIONS`（targetSdk 33+ 的运行时权限）
+ * 若两条都无效，返回系统原始输出供排查。
  */
 object NotificationRepository {
 
+    /** 解析当前活动通知（多策略容错） */
     suspend fun active(): List<ActiveNotification> = withContext(Dispatchers.IO) {
-        val dump = Shell.run("dumpsys notification --noredact").out
-        if (dump.isBlank()) return@withContext emptyList()
+        val dumps = listOf(
+            "dumpsys notification --noredact",
+            "dumpsys notification",
+        )
+        for (cmd in dumps) {
+            val out = Shell.run(cmd).out
+            if (out.isBlank()) continue
+            val parsed = parse(out)
+            if (parsed.isNotEmpty()) return@withContext parsed
+        }
+        emptyList()
+    }
 
+    private fun parse(dump: String): List<ActiveNotification> {
         val list = mutableListOf<ActiveNotification>()
-        var currentPkg: String? = null
-        var currentTitle: String? = null
+        var pkg: String? = null
+        var title: String? = null
         var ongoing = false
 
         fun flush() {
-            val p = currentPkg ?: return
-            list.add(ActiveNotification(p, currentTitle?.take(40) ?: "(无标题)", ongoing))
-            currentPkg = null
-            currentTitle = null
+            val p = pkg ?: return
+            val t = title?.trim()?.trimEnd(',')?.takeIf { it.isNotBlank() } ?: "(无标题)"
+            list.add(ActiveNotification(p, t, ongoing))
+            pkg = null
+            title = null
             ongoing = false
         }
 
         for (line in dump.lines()) {
-            val pkgMatch = Regex("""pkg=(\S+)""").find(line)
+            // 匹配 pkg=com.foo 或 pkg: com.foo
+            val pkgMatch = Regex("""pkg[=:]\s*([a-zA-Z][\w.]*)""").find(line)
+                ?: Regex("""^\s*NotificationRecord.*?([a-zA-Z][\w]*(?:\.[\w]+){2,})""").find(line)
             if (pkgMatch != null) {
                 flush()
-                currentPkg = pkgMatch.groupValues[1]
+                pkg = pkgMatch.groupValues[1]
+                continue
             }
-            if (currentPkg != null) {
-                Regex("""android\.title=(.+)""").find(line)?.let {
-                    currentTitle = it.groupValues[1].trim().trimEnd(',')
+            if (pkg != null) {
+                Regex("""\(?android\.title[=:]\s*(.+)$""").find(line)?.let {
+                    title = it.groupValues[1]
                 }
-                if (line.contains("flags=") && (line.contains("ONGOING") || line.contains("FOREGROUND_SERVICE"))) {
+                if (Regex("""flags[=:].*\b(ONGOING|FOREGROUND_SERVICE|NO_CLEAR|ONGOING_EVENT)""")
+                        .containsMatchIn(line)
+                ) {
                     ongoing = true
                 }
             }
         }
         flush()
-        list.distinctBy { it.pkg to it.title }
+        return list.distinctBy { it.pkg to it.title }
     }
 
-    /** 屏蔽/恢复该包全部通知（含常驻） */
-    suspend fun setBlocked(pkg: String, blocked: Boolean) = withContext(Dispatchers.IO) {
+    /** 屏蔽/恢复整包通知，返回操作结果说明（空串表示成功） */
+    suspend fun setBlockedDetailed(pkg: String, blocked: Boolean): String = withContext(Dispatchers.IO) {
+        val logs = mutableListOf<String>()
         if (blocked) {
-            Shell.runAsync("cmd appops set $pkg POST_NOTIFICATION ignore")
+            val r1 = Shell.runAsync("cmd appops set $pkg POST_NOTIFICATION ignore")
+            if (!r1.ok) logs.add("appops: ${r1.message().take(80)}")
+            val r2 = Shell.runAsync("pm revoke $pkg android.permission.POST_NOTIFICATIONS")
+            if (!r2.ok && !r2.message().contains("not a changeable permission", true)) {
+                logs.add("revoke: ${r2.message().take(80)}")
+            }
         } else {
-            Shell.runAsync("cmd appops set $pkg POST_NOTIFICATION allow")
+            val r1 = Shell.runAsync("cmd appops set $pkg POST_NOTIFICATION allow")
+            if (!r1.ok) logs.add("appops: ${r1.message().take(80)}")
+            Shell.runAsync("pm grant $pkg android.permission.POST_NOTIFICATIONS")
         }
-        Unit
+
+        // 回读校验
+        val now = currentMode(pkg)
+        if (blocked && now != "ignore") {
+            logs.add("回读状态=$now，未生效")
+        }
+        logs.joinToString("；")
     }
 
-    suspend fun isBlocked(pkg: String): Boolean = withContext(Dispatchers.IO) {
-        Shell.runAsync("cmd appops get $pkg POST_NOTIFICATION").out.contains("ignore")
+    /** 读取该包 POST_NOTIFICATION 的当前 appops 模式 */
+    suspend fun currentMode(pkg: String): String = withContext(Dispatchers.IO) {
+        val out = Shell.runAsync("cmd appops get $pkg POST_NOTIFICATION").out
+        when {
+            out.contains("ignore") -> "ignore"
+            out.contains("allow") -> "allow"
+            out.contains("default") -> "default"
+            out.isBlank() -> "无记录"
+            else -> out.lines().firstOrNull()?.take(40) ?: "未知"
+        }
+    }
+
+    suspend fun setBlocked(pkg: String, blocked: Boolean): Boolean =
+        setBlockedDetailed(pkg, blocked).isEmpty()
+
+    suspend fun isBlocked(pkg: String): Boolean = currentMode(pkg) == "ignore"
+
+    /** 该 ROM 是否能列出通知（用于诊断提示） */
+    suspend fun canList(): Boolean = withContext(Dispatchers.IO) {
+        val out = Shell.run("dumpsys notification").out
+        out.contains("NotificationRecord") || out.contains("pkg=")
     }
 }
