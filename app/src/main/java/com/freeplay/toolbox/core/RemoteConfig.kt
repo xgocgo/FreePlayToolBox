@@ -73,11 +73,34 @@ object RemoteConfig {
 
     // ---------- 公告 ----------
 
-    private fun announceUrls(): List<String> = listOf(
-        "https://cdn.jsdelivr.net/gh/$REPO@$BRANCH/announcements.json",
-        "https://raw.githubusercontent.com/$REPO/$BRANCH/announcements.json",
-        "https://gcore.jsdelivr.net/gh/$REPO@$BRANCH/announcements.json",
-    )
+    /**
+     * 公告源优先级（按实测可达性排序）：
+     * 1. api.github.com contents 接口 —— 返回 base64，需解码；国内多数网络可通
+     * 2. jsDelivr + 时间戳 —— 绕过 CDN 缓存
+     * 3. raw.githubusercontent —— 实时但国内常被阻断
+     */
+    private fun announceUrls(): List<String> {
+        val bust = System.currentTimeMillis() / 60000
+        return listOf(
+            "https://api.github.com/repos/$REPO/contents/announcements.json?ref=$BRANCH",
+            "https://cdn.jsdelivr.net/gh/$REPO@$BRANCH/announcements.json?t=$bust",
+            "https://raw.githubusercontent.com/$REPO/$BRANCH/announcements.json",
+        )
+    }
+
+    /** GitHub contents 接口返回的是 base64 包裹的 JSON，这里统一解成纯文本 */
+    private fun unwrapContent(raw: String): String {
+        val trimmed = raw.trim()
+        if (!trimmed.startsWith("{")) return trimmed
+        return try {
+            val o = JSONObject(trimmed)
+            val b64 = o.optString("content", "")
+            if (b64.isBlank()) return trimmed
+            String(android.util.Base64.decode(b64.replace("\n", ""), android.util.Base64.DEFAULT))
+        } catch (_: Throwable) {
+            trimmed
+        }
+    }
 
     /** 拉取未读公告；失败返回空列表（静默） */
     suspend fun fetchAnnouncements(c: Context): List<Announcement> = withContext(Dispatchers.IO) {
@@ -86,7 +109,7 @@ object RemoteConfig {
             .getStringSet(KEY_READ_IDS, emptySet()) ?: emptySet()
 
         for (u in announceUrls()) {
-            val text = httpGet(u) ?: continue
+            val text = httpGet(u, json = true)?.let { unwrapContent(it) } ?: continue
             val items = runCatching {
                 val root = JSONObject(text)
                 val arr = root.optJSONArray("items") ?: return@runCatching emptyList<Announcement>()
