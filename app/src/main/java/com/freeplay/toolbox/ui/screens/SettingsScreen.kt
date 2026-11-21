@@ -17,11 +17,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.freeplay.toolbox.core.AppState
 import com.freeplay.toolbox.core.CrashLogger
 import com.freeplay.toolbox.ui.components.CrashReportDialog
@@ -38,6 +42,19 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var crashLog by remember { mutableStateOf(CrashLogger.read(context)) }
     var showCrash by remember { mutableStateOf(false) }
+    var backups by remember { mutableStateOf<List<java.io.File>>(emptyList()) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var toast by remember { mutableStateOf<String?>(null) }
+
+    androidx.compose.runtime.LaunchedEffect(toast) {
+        toast?.let {
+            android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show()
+            toast = null
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        backups = com.freeplay.toolbox.data.ConfigBackup.listBackups()
+    }
     var showDisclaimer by remember { mutableStateOf(false) }
 
     if (showCrash && crashLog != null) {
@@ -93,6 +110,51 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 }
             } else null,
         )
+
+        SectionTitle("配置备份")
+
+        KsuListItem(
+            icon = Icons.Filled.Description,
+            title = "导出配置",
+            subtitle = "收藏命令、筛选偏好、冻结清单 → Download/DSH-Go/backup_*.json",
+            tint = NeonCyan,
+            onClick = {
+                scope.launch {
+                    val frozen = withContext(Dispatchers.IO) {
+                        com.freeplay.toolbox.data.AppListCache.getOrLoad(context)
+                            .filter { it.isSuspended }
+                            .map { it.pkg to it.label }
+                    }
+                    val f = withContext(Dispatchers.IO) {
+                        com.freeplay.toolbox.data.ConfigBackup.export(context, frozen)
+                    }
+                    backups = com.freeplay.toolbox.data.ConfigBackup.listBackups()
+                    toast = if (f != null) "已导出：${f.name}" else "导出失败（检查存储权限）"
+                }
+            },
+        )
+
+        backups.take(3).forEach { f ->
+            KsuListItem(
+                icon = Icons.Filled.Description,
+                title = "导入：${f.name}",
+                subtitle = "${f.length() / 1024} KB · 覆盖筛选偏好，合并收藏命令",
+                tint = NeonPurple,
+                onClick = {
+                    scope.launch {
+                        val snap = withContext(Dispatchers.IO) {
+                            com.freeplay.toolbox.data.ConfigBackup.parse(f.readText())
+                        }
+                        if (snap == null) {
+                            toast = "文件解析失败"
+                        } else {
+                            com.freeplay.toolbox.data.ConfigBackup.apply(context, snap)
+                            toast = "已导入：收藏 ${snap.favCommands.size} 条，冻结记录 ${snap.frozenApps.size} 项"
+                        }
+                    }
+                },
+            )
+        }
 
         SectionTitle("法律与声明")
 

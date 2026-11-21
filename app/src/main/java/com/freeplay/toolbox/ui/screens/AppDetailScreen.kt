@@ -72,6 +72,9 @@ fun AppDetailScreen(
     var pendingRisk by remember { mutableStateOf<String?>(null) }
     var pendingRisks by remember { mutableStateOf<List<String>>(emptyList()) }
     var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var comps by remember { mutableStateOf<List<com.freeplay.toolbox.data.CompEntry>>(emptyList()) }
+    var compKind by remember { mutableStateOf("Activity") }
+    var compExpanded by remember(app.pkg) { mutableStateOf(false) }
 
     BackHandler { onBack() }
 
@@ -79,6 +82,14 @@ fun AppDetailScreen(
         scope.launch { detail = AppDetailRepository.loadAsync(context, app) }
     }
     LaunchedEffect(app.pkg) { refresh() }
+
+    LaunchedEffect(app.pkg, granted) {
+        if (granted) {
+            comps = withContext(Dispatchers.IO) {
+                com.freeplay.toolbox.data.ComponentRepository.load(context, app.pkg)
+            }
+        }
+    }
 
     LaunchedEffect(toast) {
         toast?.let {
@@ -394,6 +405,71 @@ fun AppDetailScreen(
                                                     else "启动失败：${r.message().take(80)}"
                                                 }
                                             },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                NeonCard {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { compExpanded = !compExpanded },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("组件管理（${comps.size}）", style = MaterialTheme.typography.titleMedium)
+                            Spacer(Modifier.weight(1f))
+                            Text(if (compExpanded) "收起" else "展开", fontSize = 12.sp, color = NeonCyan)
+                        }
+                        Text(
+                            "单独禁用某个组件，其余功能不受影响（常用于只关推送服务或开机自启）",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (compExpanded) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                listOf("Activity", "Service", "Receiver", "Provider").forEach { k ->
+                                    val has = comps.any { it.kind == k }
+                                    SmallPill(k, compKind == k, has) { compKind = k }
+                                }
+                            }
+                            val list = comps.filter { it.kind == compKind }
+                            if (list.isEmpty()) {
+                                Text(
+                                    "该类下没有组件",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            list.forEach { c ->
+                                Row(
+                                    Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        c.shortName,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                    )
+                                    Switch(
+                                        checked = c.enabled,
+                                        enabled = granted,
+                                        onCheckedChange = { want ->
+                                            scope.launch {
+                                                com.freeplay.toolbox.data.ComponentRepository
+                                                    .setEnabled(app.pkg, c.fullName, want)
+                                                comps = withContext(Dispatchers.IO) {
+                                                    com.freeplay.toolbox.data.ComponentRepository.load(context, app.pkg)
+                                                }
+                                                toast = if (want) "已启用 ${c.shortName}" else "已禁用 ${c.shortName}"
+                                            }
+                                        },
                                     )
                                 }
                             }

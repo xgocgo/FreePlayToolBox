@@ -135,6 +135,7 @@ fun ToolsScreen(modifier: Modifier = Modifier) {
     var ovProcess by remember { mutableStateOf(false) }
     var ovFps by remember { mutableStateOf(false) }
     var ovTemp by remember { mutableStateOf(false) }
+    var subScreen by remember { mutableStateOf<String?>(null) }
     // 命令
     var command by remember { mutableStateOf("") }
     var funcSearch by remember { mutableStateOf("") }
@@ -213,9 +214,18 @@ fun ToolsScreen(modifier: Modifier = Modifier) {
         Category("设备控制", "dhizuku 设备 相机 静音 锁屏 状态栏 代理 隐藏 卸载", "Dhizuku 设备所有者能力", Icons.Filled.Smartphone),
         Category("工具", "工具 伪装 短信 命令 收藏 adb", "伪装短信、自定义命令、收藏夹", Icons.Filled.Build),
         Category("悬浮窗", "悬浮窗 监视 负载 进程 帧率 温度 内存 cpu", "负载/进程/帧率/温度悬浮监视器", Icons.Filled.Visibility),
+        Category("网络", "网络 ip dns wifi 网关 私有dns", "IP/DNS/WiFi 信息与私有 DNS 设置", Icons.Filled.Settings),
+        Category("通知", "通知 常驻 屏蔽 静音 状态栏", "活动通知列表、按包屏蔽、隐藏常驻", Icons.Filled.Visibility),
+        Category("隐私", "隐私 审计 相机 麦克风 位置 传感器", "敏感权限的最近访问记录", Icons.Filled.Visibility),
     )
 
-    if (cat == null) {
+    if (subScreen == "network") {
+        NetworkScreen(onBack = { subScreen = null }, modifier = modifier)
+    } else if (subScreen == "notify") {
+        NotificationScreen(onBack = { subScreen = null }, modifier = modifier)
+    } else if (subScreen == "privacy") {
+        PrivacyScreen(onBack = { subScreen = null }, modifier = modifier)
+    } else if (cat == null) {
         Column(
             modifier
                 .fillMaxSize()
@@ -997,6 +1007,35 @@ fun ToolsScreen(modifier: Modifier = Modifier) {
                 }
             }
         }
+        }
+
+        if (cat == "网络" || cat == "通知" || cat == "隐私") {
+            item {
+                NeonCard {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(cat, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            when (cat) {
+                                "网络" -> "查看 IP / 网关 / DNS，设置私有 DNS（可加密查询、屏蔽广告域名）"
+                                "通知" -> "列出当前活动通知，按包屏蔽全部通知；常驻通知同样可隐藏"
+                                else -> "统计相机、麦克风、位置、身体活动的最近访问时间"
+                            },
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(
+                            enabled = AppState.shizukuGranted || cat == "网络",
+                            onClick = {
+                                subScreen = when (cat) {
+                                    "网络" -> "network"
+                                    "通知" -> "notify"
+                                    else -> "privacy"
+                                }
+                            },
+                        ) { Text("打开${cat}面板") }
+                    }
+                }
+            }
         }
 
         if (cat == "悬浮窗") {
