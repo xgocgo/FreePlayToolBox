@@ -6,7 +6,16 @@
 
 ## 近期变更（v0.7.0 简介版 → v0.9.0 当前）
 
-### v0.10.0
+### v0.11.0
+
+- **安全与隐私声明**：首次启动强制阅读，承诺无远程执行通道、明列上传与不上传内容，可一键改为完全离线
+- **公告通道**：首页横幅展示，jsDelivr 回落 raw.githubusercontent，已读 id 去重，拉取失败静默
+- **在线更新**：检查 GitHub 最新版本，下载支持 4 个镜像前缀回落，带 sha256 校验与安装向导
+- **设置页新增「安全与隐私」区**：完全离线模式、接收公告、检查更新三个开关
+- 新增 INTERNET / REQUEST_INSTALL_PACKAGES 权限与 FileProvider
+- 仓库根目录新增 announcements.json 作为公告源
+
+## v0.10.0
 
 - **组件级控制**：应用详情页新增组件管理，可对 Activity / Service / Receiver / Provider 单独启停
 - **配置备份与迁移**：导出/导入收藏命令、应用页筛选偏好、冻结清单（JSON，存 Download/DSH-Go）

@@ -2,6 +2,7 @@ package com.freeplay.toolbox.ui.screens
 
 import android.app.Activity
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,6 +48,7 @@ import com.freeplay.toolbox.data.DeviceRepository
 import com.freeplay.toolbox.ui.components.HeroCard
 import com.freeplay.toolbox.ui.components.KsuGroup
 import com.freeplay.toolbox.ui.components.KsuRow
+import com.freeplay.toolbox.ui.components.NeonCard
 import com.freeplay.toolbox.ui.components.StatusPill
 import com.freeplay.toolbox.ui.theme.NeonGreen
 import com.freeplay.toolbox.ui.theme.NeonRed
@@ -59,6 +61,16 @@ fun DashboardScreen(modifier: Modifier = Modifier) {
     var selinux by remember { mutableStateOf("读取中…") }
     var slotSuffix by remember { mutableStateOf("读取中…") }
     var toast by remember { mutableStateOf<String?>(null) }
+    var announcements by remember { mutableStateOf<List<com.freeplay.toolbox.core.Announcement>>(emptyList()) }
+    var dismissed by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    LaunchedEffect(Unit) {
+        val list = com.freeplay.toolbox.core.RemoteConfig.fetchAnnouncements(context)
+        if (list.isNotEmpty()) {
+            announcements = list
+            com.freeplay.toolbox.core.RemoteConfig.markRead(context, list.map { it.id })
+        }
+    }
 
     LaunchedEffect(toast) {
         toast?.let {
@@ -151,6 +163,33 @@ fun DashboardScreen(modifier: Modifier = Modifier) {
                     Button(onClick = {
                         (context as? Activity)?.let { ShizukuManager.requestPermission(it) }
                     }) { Text("授权 Shizuku") }
+                }
+            }
+        }
+
+        announcements.filter { it.id !in dismissed }.forEach { a ->
+            NeonCard {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("公告", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "×",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .clickable { dismissed = dismissed + a.id }
+                                .padding(horizontal = 6.dp),
+                        )
+                    }
+                    Text(a.title, fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+                    if (a.body.isNotBlank()) {
+                        Text(
+                            a.body,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
