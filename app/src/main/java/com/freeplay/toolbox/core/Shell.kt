@@ -77,9 +77,27 @@ object Shell {
 
     suspend fun enable(pkg: String): ShellResult = runAsync("pm enable $pkg")
 
-    suspend fun hide(pkg: String): ShellResult = runAsync("pm hide --user 0 $pkg")
+    /** 依次尝试多条命令，返回第一条成功的；全失败返回最后一条结果 */
+    suspend fun firstOk(vararg cmds: String): ShellResult {
+        var last = ShellResult(-1, "", "未执行")
+        for (c in cmds) {
+            last = runAsync(c)
+            if (last.ok) return last
+            // 明确的"未知命令"才继续换写法，其他错误直接返回，避免掩盖真实原因
+            if (!last.message().contains("Unknown command", true) &&
+                !last.message().contains("usage", true) &&
+                !last.message().contains("Error: no such", true)
+            ) return last
+        }
+        return last
+    }
 
-    suspend fun unhide(pkg: String): ShellResult = runAsync("pm unhide --user 0 $pkg")
+    /** 隐藏应用：pm hide 不接受 --user 参数，先试标准写法 */
+    suspend fun hide(pkg: String): ShellResult =
+        firstOk("pm hide $pkg", "pm hide --user 0 $pkg")
+
+    suspend fun unhide(pkg: String): ShellResult =
+        firstOk("pm unhide $pkg", "pm unhide --user 0 $pkg")
 
     suspend fun grant(pkg: String, perm: String): ShellResult = runAsync("pm grant $pkg $perm")
 

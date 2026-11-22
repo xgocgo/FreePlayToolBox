@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.freeplay.toolbox.core.AppState
+import com.freeplay.toolbox.core.DeviceControl
 import com.freeplay.toolbox.core.Shell
 import com.freeplay.toolbox.data.AppDetail
 import com.freeplay.toolbox.data.AppDetailRepository
@@ -260,7 +261,17 @@ fun AppDetailScreen(
                                     )) {
                                         scope.launch {
                                             val r = Shell.hide(app.pkg)
-                                            toast = if (r.ok) "已隐藏" else r.message()
+                                            if (r.ok) {
+                                                toast = "已隐藏"
+                                            } else if (AppState.dhizukuAvailable) {
+                                                // shell 隐藏失败时，改用 Dhizuku 设备所有者能力
+                                                val ok = runCatching {
+                                                    DeviceControl.setApplicationHidden(app.pkg, true)
+                                                }.getOrDefault(false)
+                                                toast = if (ok) "已隐藏（Dhizuku）" else "隐藏失败：${r.message().take(80)}"
+                                            } else {
+                                                toast = "隐藏失败：${r.message().take(80)}"
+                                            }
                                         }
                                     }
                                 },
@@ -271,7 +282,16 @@ fun AppDetailScreen(
                                     run {
                                         scope.launch {
                                             val r = Shell.unhide(app.pkg)
-                                            toast = if (r.ok) "已取消隐藏" else r.message()
+                                            if (r.ok) {
+                                                toast = "已取消隐藏"
+                                            } else if (AppState.dhizukuAvailable) {
+                                                val ok = runCatching {
+                                                    DeviceControl.setApplicationHidden(app.pkg, false)
+                                                }.getOrDefault(false)
+                                                toast = if (ok) "已取消隐藏（Dhizuku）" else "取消隐藏失败：${r.message().take(80)}"
+                                            } else {
+                                                toast = "取消隐藏失败：${r.message().take(80)}"
+                                            }
                                         }
                                     }
                                 },
