@@ -116,6 +116,7 @@ fun ToolsScreen(modifier: Modifier = Modifier) {
     var lowPower by remember { mutableStateOf(false) }
     var stayOn by remember { mutableStateOf("0") }
     var batteryLevel by remember { mutableFloatStateOf(80f) }
+    var simulateCharging by remember { mutableStateOf(true) }
     // 屏幕显示
     var screen by remember { mutableStateOf<ScreenInfo?>(null) }
     var sizeW by remember { mutableStateOf("") }
@@ -312,6 +313,28 @@ fun ToolsScreen(modifier: Modifier = Modifier) {
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(
+                            selected = simulateCharging,
+                            onClick = { simulateCharging = true },
+                            label = { Text("充电中", fontSize = 11.sp) },
+                        )
+                        FilterChip(
+                            selected = !simulateCharging,
+                            onClick = { simulateCharging = false },
+                            label = { Text("放电中", fontSize = 11.sp) },
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            when {
+                                simulateCharging && batteryLevel.toInt() >= 99 -> "已充满"
+                                simulateCharging -> "往上涨"
+                                else -> "往下掉"
+                            },
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Slider(
                         value = batteryLevel,
                         onValueChange = { batteryLevel = it },
@@ -329,7 +352,7 @@ fun ToolsScreen(modifier: Modifier = Modifier) {
                             onClick = {
                                 val lv = batteryLevel.toInt()
                                 runWithRisk(
-                                    "电量模拟 ${lv}%",
+                                    if (simulateCharging) "电量模拟 ${lv}%（充电）" else "电量模拟 ${lv}%（放电）",
                                     listOf(
                                         "状态栏电池显示将与真实电量不符，充电图标可能出现异常",
                                         "系统可能据此做出错误判断（如触发低电量省电策略）",
@@ -342,7 +365,7 @@ fun ToolsScreen(modifier: Modifier = Modifier) {
                                                 "dumpsys battery set status ${if (lv >= 99) 5 else 2} && " +
                                                 "dumpsys battery set ac 1"
                                         )
-                                        toast = "已模拟为 ${lv}% 充电中"
+                                        toast = if (simulateCharging) "已模拟为 ${lv}% 充电中" else "已模拟为 ${lv}% 放电中"
                                     }
                                 }
                             },

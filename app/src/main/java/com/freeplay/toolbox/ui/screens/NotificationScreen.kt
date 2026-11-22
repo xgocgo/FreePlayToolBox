@@ -96,7 +96,7 @@ fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             }
             if (allow) blocked.remove(pkg) else if (!blocked.contains(pkg)) blocked.add(pkg)
             toast = if (err.isEmpty()) {
-                if (allow) "已恢复 $pkg 的通知" else "已隐藏 $pkg 的通知（含常驻）"
+                if (allow) "已恢复 $pkg 的通知" else "已关闭 $pkg 的通知权限（含常驻）"
             } else {
                 "未完全生效：$err"
             }
@@ -127,13 +127,13 @@ fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
             // ---------- 手动屏蔽 ----------
             item {
-                SectionTitle("按包名隐藏（列表读不到时用这个）")
+                SectionTitle("按包名关闭通知（列表读不到时用这个）")
             }
             item {
                 NeonCard {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            "输入包名可屏蔽该应用全部通知，常驻通知（如「正在运行」）同样会消失",
+                            "关闭后该应用无法发出任何通知，常驻通知（如「正在运行」）也会消失",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -155,7 +155,7 @@ fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                             Button(
                                 enabled = manualPkg.isNotBlank() && AppState.shizukuGranted,
                                 onClick = { apply(manualPkg, false); manualMode = null },
-                            ) { Text("隐藏通知") }
+                            ) { Text("关闭通知") }
                             OutlinedButton(
                                 enabled = manualPkg.isNotBlank() && AppState.shizukuGranted,
                                 onClick = { apply(manualPkg, true); manualMode = null },
@@ -227,7 +227,7 @@ fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
             item {
                 Text(
-                    "说明：隐藏能力取决于系统是否允许 shell 修改 POST_NOTIFICATION。部分 ROM 会忽略该设置，此时「查状态」会显示实际生效的模式。",
+                    "说明：本质是关闭该应用的通知权限。部分 ROM 会拒绝 shell 修改，此时点「查状态」可看到实际状态。",
                     fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

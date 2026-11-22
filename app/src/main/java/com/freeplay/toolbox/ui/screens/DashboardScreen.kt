@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -64,12 +65,12 @@ fun DashboardScreen(modifier: Modifier = Modifier) {
     var announcements by remember { mutableStateOf<List<com.freeplay.toolbox.core.Announcement>>(emptyList()) }
     var dismissed by remember { mutableStateOf<Set<String>>(emptySet()) }
 
+    var readIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+
     LaunchedEffect(Unit) {
-        val list = com.freeplay.toolbox.core.RemoteConfig.fetchAnnouncements(context)
-        if (list.isNotEmpty()) {
-            announcements = list
-            com.freeplay.toolbox.core.RemoteConfig.markRead(context, list.map { it.id })
-        }
+        readIds = com.freeplay.toolbox.core.RemoteConfig.readIds(context)
+        val list = com.freeplay.toolbox.core.RemoteConfig.fetchAnnouncements(context, onlyUnread = false)
+        if (list.isNotEmpty()) announcements = list
     }
 
     LaunchedEffect(toast) {
@@ -167,28 +168,120 @@ fun DashboardScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        announcements.filter { it.id !in dismissed }.forEach { a ->
+        if (announcements.isNotEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 4.dp, top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("公告", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val unread = announcements.count { it.id !in readIds }
+                if (unread > 0) {
+                    Spacer(Modifier.padding(start = 6.dp))
+                    com.freeplay.toolbox.ui.components.StatusPill(
+                        "$unread 条未读",
+                        MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "全部标为已读",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clickable {
+                            com.freeplay.toolbox.core.RemoteConfig
+                                .markRead(context, announcements.map { it.id })
+                            readIds = com.freeplay.toolbox.core.RemoteConfig.readIds(context)
+                        }
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
+        }
+        announcements.forEach { a ->
+            val accent = when (a.level) {
+                "important" -> com.freeplay.toolbox.ui.theme.NeonRed
+                "warn" -> com.freeplay.toolbox.ui.theme.KsuOrange
+                else -> MaterialTheme.colorScheme.primary
+            }
+            val isRead = a.id in readIds
+            var expanded by remember(a.id) { mutableStateOf(false) }
             NeonCard {
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("公告", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            "×",
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        Box(
+                            Modifier
+                                .size(28.dp)
+                                .background(accent.copy(alpha = 0.16f), RoundedCornerShape(9.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Filled.Build,
+                                null,
+                                tint = accent,
+                                modifier = Modifier.size(15.dp),
+                            )
+                        }
+                        Spacer(Modifier.padding(start = 10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                a.title,
+                                fontSize = 14.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                                maxLines = 1,
+                                color = if (isRead) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                when {
+                                    a.level == "important" -> "重要"
+                                    a.level == "warn" -> "提醒"
+                                    else -> "通知"
+                                },
+                                fontSize = 10.sp,
+                                color = accent,
+                            )
+                        }
+                        com.freeplay.toolbox.ui.components.SmallPill(
+                            if (isRead) "已读" else "未读",
+                            !isRead,
+                        ) {
+                            if (isRead) {
+                                // 标回未读：从已读集合移除
+                                val sp = context.getSharedPreferences("toolbox_prefs", android.content.Context.MODE_PRIVATE)
+                                val now = (sp.getStringSet("read_announce_ids", emptySet()) ?: emptySet()) - a.id
+                                sp.edit().putStringSet("read_announce_ids", now).apply()
+                                readIds = now
+                            } else {
+                                com.freeplay.toolbox.core.RemoteConfig.markRead(context, listOf(a.id))
+                                readIds = com.freeplay.toolbox.core.RemoteConfig.readIds(context)
+                            }
+                        }
+                    }
+                    if (a.image.isNotBlank()) {
+                        com.freeplay.toolbox.ui.components.RemoteImage(
+                            url = a.image,
                             modifier = Modifier
-                                .clickable { dismissed = dismissed + a.id }
-                                .padding(horizontal = 6.dp),
+                                .fillMaxWidth()
+                                .height(120.dp),
                         )
                     }
-                    Text(a.title, fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
                     if (a.body.isNotBlank()) {
                         Text(
-                            a.body,
+                            if (expanded) a.body else a.body.take(60) + if (a.body.length > 60) "…" else "",
                             fontSize = 12.sp,
+                            lineHeight = 17.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        if (a.body.length > 60) {
+                            Text(
+                                if (expanded) "收起" else "展开全文",
+                                fontSize = 11.sp,
+                                color = accent,
+                                modifier = Modifier.clickable { expanded = !expanded },
+                            )
+                        }
                     }
                 }
             }

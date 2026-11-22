@@ -4,6 +4,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -32,7 +34,6 @@ import com.freeplay.toolbox.core.AppState
 import com.freeplay.toolbox.core.CrashLogger
 import com.freeplay.toolbox.core.RemoteConfig
 import com.freeplay.toolbox.ui.components.CrashReportDialog
-import com.freeplay.toolbox.ui.components.DisclaimerDialog
 import com.freeplay.toolbox.ui.components.HeroCard
 import com.freeplay.toolbox.ui.components.KsuListItem
 import com.freeplay.toolbox.ui.components.SectionTitle
@@ -48,9 +49,11 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     var showCrash by remember { mutableStateOf(false) }
     var backups by remember { mutableStateOf<List<java.io.File>>(emptyList()) }
     var online by remember { mutableStateOf(RemoteConfig.onlineEnabled(context)) }
-    var announce by remember { mutableStateOf(RemoteConfig.announceEnabled(context)) }
     var updateCheck by remember { mutableStateOf(RemoteConfig.updateEnabled(context)) }
     var showPrivacy by remember { mutableStateOf(false) }
+    var workerUrl by remember {
+        mutableStateOf(RemoteConfig.customSources(context).joinToString("\n"))
+    }
     var checking by remember { mutableStateOf(false) }
     var updateInfo by remember { mutableStateOf<com.freeplay.toolbox.core.ReleaseInfo?>(null) }
     var downloading by remember { mutableStateOf(false) }
@@ -66,7 +69,6 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     androidx.compose.runtime.LaunchedEffect(Unit) {
         backups = com.freeplay.toolbox.data.ConfigBackup.listBackups()
     }
-    var showDisclaimer by remember { mutableStateOf(false) }
 
     updateInfo?.let { info ->
         com.freeplay.toolbox.ui.components.UpdateDialog(
@@ -79,21 +81,12 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         CrashReportDialog(log = crashLog!!, onDismiss = { showCrash = false })
     }
     if (showPrivacy) {
-        com.freeplay.toolbox.ui.components.PrivacyDialog(
-            onAccept = { showPrivacy = false },
-            onDecline = {
-                RemoteConfig.setOnline(context, false)
-                online = false
-                showPrivacy = false
-            },
-            acceptText = "关闭",
-            declineText = "改为完全离线",
-        )
-    }
-    if (showDisclaimer) {
-        DisclaimerDialog(
-            onAccepted = { showDisclaimer = false },
-            onDeclined = { showDisclaimer = false },
+        com.freeplay.toolbox.ui.components.ConsentDialog(
+            firstTime = false,
+            onExit = { showPrivacy = false },
+            onAcceptOffline = { showPrivacy = false },
+            onAcceptOnline = { showPrivacy = false },
+            onClose = { showPrivacy = false },
         )
     }
 
@@ -186,15 +179,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             )
         }
 
-        SectionTitle("安全与隐私")
-
-        KsuListItem(
-            icon = Icons.Filled.Security,
-            title = "安全与隐私声明",
-            subtitle = "承诺无远程执行、明列上传与不上传内容",
-            tint = NeonGreen,
-            onClick = { showPrivacy = true },
-        )
+        SectionTitle("隐私")
 
         KsuListItem(
             icon = Icons.Filled.Settings,
@@ -205,23 +190,11 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 val next = !online
                 RemoteConfig.setOnline(context, next)
                 online = next
-                if (next) { announce = RemoteConfig.announceEnabled(context); updateCheck = RemoteConfig.updateEnabled(context) }
+                if (next) { updateCheck = RemoteConfig.updateEnabled(context) }
             },
         )
 
         if (online) {
-            KsuListItem(
-                icon = Icons.Filled.Description,
-                title = "接收公告",
-                subtitle = "从仓库拉取公告文字",
-                tint = NeonPurple,
-                trailing = {
-                    androidx.compose.material3.Switch(
-                        checked = announce,
-                        onCheckedChange = { RemoteConfig.setAnnounce(context, it); announce = it },
-                    )
-                },
-            )
             KsuListItem(
                 icon = Icons.Filled.Description,
                 title = "检查在线更新",
@@ -249,11 +222,13 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
         KsuListItem(
             icon = Icons.Filled.Description,
-            title = "免责声明",
-            subtitle = "重新阅读免责声明与使用条款",
-            tint = NeonCyan,
-            onClick = { showDisclaimer = true },
+            title = "免责与隐私声明",
+            subtitle = "含联网说明、上传范围与离线选项",
+            tint = NeonGreen,
+
+            onClick = { showPrivacy = true },
         )
+
 
         SectionTitle("关于")
 

@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -34,6 +35,24 @@ private val tabs = listOf(
 @Composable
 fun MainNav() {
     var current by rememberSaveable { mutableStateOf(0) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var unread by remember { mutableStateOf<List<com.freeplay.toolbox.core.Announcement>>(emptyList()) }
+
+    // 启动时只弹未读公告；关闭后标记已读，之后仅在首页常驻显示
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        val list = com.freeplay.toolbox.core.RemoteConfig.fetchAnnouncements(context, onlyUnread = true)
+        if (list.isNotEmpty()) unread = list
+    }
+
+    if (unread.isNotEmpty()) {
+        com.freeplay.toolbox.ui.components.AnnouncementDialog(
+            items = unread,
+            onClose = {
+                com.freeplay.toolbox.core.RemoteConfig.markRead(context, unread.map { it.id })
+                unread = emptyList()
+            },
+        )
+    }
 
     Scaffold(
         bottomBar = {

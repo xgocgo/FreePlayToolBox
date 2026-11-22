@@ -13,10 +13,9 @@ import com.freeplay.toolbox.core.AppState
 import com.freeplay.toolbox.core.CrashLogger
 import com.freeplay.toolbox.core.RemoteConfig
 import com.freeplay.toolbox.core.ShizukuManager
-import com.freeplay.toolbox.ui.DisclaimerGate
 import com.freeplay.toolbox.ui.MainNav
 import com.freeplay.toolbox.ui.components.CrashReportDialog
-import com.freeplay.toolbox.ui.components.PrivacyDialog
+import com.freeplay.toolbox.ui.components.ConsentDialog
 import com.freeplay.toolbox.ui.theme.ToolBoxTheme
 import rikka.shizuku.Shizuku
 
@@ -47,38 +46,25 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
                         },
                     )
                 } else {
-                    var privacyAcked by remember {
-                        mutableStateOf(
-                            prefs.getBoolean("privacy_ack", false)
+                    var consented by remember { mutableStateOf(prefs.getBoolean("consent_ok", false)) }
+                    if (!consented) {
+                        ConsentDialog(
+                            firstTime = true,
+                            onExit = { finishAffinity() },
+                            onAcceptOffline = {
+                                prefs.edit()
+                                    .putBoolean("consent_ok", true)
+                                    .putBoolean(RemoteConfig.KEY_ONLINE, false)
+                                    .apply()
+                                consented = true
+                            },
+                            onAcceptOnline = {
+                                prefs.edit().putBoolean("consent_ok", true).apply()
+                                consented = true
+                            },
                         )
-                    }
-                    DisclaimerGate(
-                        accepted = done && accepted,
-                        onAccept = {
-                            prefs.edit().putBoolean("disclaimer_accepted", true).apply()
-                            accepted = true
-                        },
-                        onDecline = { finishAffinity() },
-                    ) {
-                        if (!privacyAcked) {
-                            PrivacyDialog(
-                                onAccept = {
-                                    prefs.edit().putBoolean("privacy_ack", true).apply()
-                                    privacyAcked = true
-                                },
-                                onDecline = {
-                                    prefs.edit()
-                                        .putBoolean("privacy_ack", true)
-                                        .putBoolean(RemoteConfig.KEY_ONLINE, false)
-                                        .apply()
-                                    privacyAcked = true
-                                },
-                                acceptText = "我已了解，继续使用",
-                                declineText = "完全离线使用（不上传任何数据）",
-                            )
-                        } else {
-                            MainNav()
-                        }
+                    } else {
+                        MainNav()
                     }
                 }
             }

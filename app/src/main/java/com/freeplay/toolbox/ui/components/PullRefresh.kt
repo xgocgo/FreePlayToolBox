@@ -41,8 +41,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 
-private const val THRESHOLD = 300f      // 触发刷新的下拉像素
-private const val MAX_OVERSCROLL = 480f // 最大下拉视觉距离
+private const val THRESHOLD = 120f      // 触发刷新的下拉像素
+private const val MAX_OVERSCROLL = 240f // 最大下拉视觉距离
 
 /**
  * 主流风格下拉刷新：下拉出现一个渐显的圆球，箭头随下拉角度翻转，
@@ -85,6 +85,18 @@ fun PullToRefreshBox(
 
     val connection = remember(listState) {
         object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val atTop = listState.firstVisibleItemIndex == 0 &&
+                    listState.firstVisibleItemScrollOffset == 0
+                // 列表已在顶部还要继续下拉：直接开始累积，不等列表消费
+                if (available.y > 0 && atTop) {
+                    raw = (raw + available.y).coerceAtMost(MAX_OVERSCROLL)
+                } else if (available.y < 0) {
+                    raw = (raw + available.y).coerceAtLeast(0f)
+                }
+                return Offset.Zero
+            }
+
             override fun onPostScroll(
                 consumed: Offset,
                 available: Offset,

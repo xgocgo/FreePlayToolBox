@@ -9,7 +9,13 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
 
-data class Announcement(val id: String, val title: String, val body: String)
+data class Announcement(
+    val id: String,
+    val title: String,
+    val body: String,
+    val level: String = "info",
+    val image: String = "",
+)
 
 data class ReleaseInfo(
     val tag: String,
@@ -36,6 +42,9 @@ object RemoteConfig {
     const val KEY_UPDATE = "net_update"          // 更新检查
     private const val KEY_UUID = "install_id"
     private const val KEY_READ_IDS = "read_announce_ids"
+    private const val KEY_WORKER = "ann_worker_url"
+    private const val KEY_CACHE = "ann_cache"
+    private const val KEY_EDIT_URL = "ann_edit_url"
 
     private const val REPO = "xgocgo/FreePlayToolBox"
     private const val BRANCH = "master"
@@ -45,8 +54,7 @@ object RemoteConfig {
     fun onlineEnabled(c: Context): Boolean =
         c.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(KEY_ONLINE, true)
 
-    fun announceEnabled(c: Context): Boolean =
-        onlineEnabled(c) && c.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(KEY_ANNOUNCE, true)
+    fun announceEnabled(c: Context): Boolean = onlineEnabled(c)
 
     fun updateEnabled(c: Context): Boolean =
         onlineEnabled(c) && c.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(KEY_UPDATE, true)
@@ -79,13 +87,66 @@ object RemoteConfig {
      * 2. jsDelivr + 时间戳 —— 绕过 CDN 缓存
      * 3. raw.githubusercontent —— 实时但国内常被阻断
      */
-    private fun announceUrls(): List<String> {
+    private fun announceUrls(c: Context): List<String> {
         val bust = System.currentTimeMillis() / 60000
-        return listOf(
+        val self = customSources(c).map { it.trimEnd('/') }
+        return self + listOf(
+            "https://gitee.com/zhy3860770417/toolbox-ann/raw/master/announcements.json?t=$bust",
             "https://api.github.com/repos/$REPO/contents/announcements.json?ref=$BRANCH",
             "https://cdn.jsdelivr.net/gh/$REPO@$BRANCH/announcements.json?t=$bust",
             "https://raw.githubusercontent.com/$REPO/$BRANCH/announcements.json",
         )
+    }
+
+    /**
+     * 从混杂文本（如 QQ 收藏分享页的 HTML）里提取 JSON 对象。
+     * 做法：定位 "items" 出现处，向前找最近的 '{'，再做花括号配平向后截取，
+     * 逐个尝试解析，第一个成功且含 items 数组的即为结果。
+     */
+    private fun extractJson(raw: String): String? {
+        val text = raw
+            .replace("&quot;", "\"")
+            .replace("&#34;", "\"")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&#39;", "'")
+
+        var from = text.indexOf("\"items\"")
+        var guard = 0
+        while (from >= 0 && guard < 12) {
+            guard++
+            val start = text.lastIndexOf('{', from)
+            if (start >= 0) {
+                var depth = 0
+                var inStr = false
+                var esc = false
+                var i = start
+                while (i < text.length && i - start < 400_000) {
+                    val ch = text[i]
+                    when {
+                        esc -> esc = false
+                        ch == '\\' && inStr -> esc = true
+                        ch == '"' -> inStr = !inStr
+                        !inStr && ch == '{' -> depth++
+                        !inStr && ch == '}' -> {
+                            depth--
+                            if (depth == 0) {
+                                val candidate = text.substring(start, i + 1)
+                                if (runCatching {
+                                        JSONObject(candidate).optJSONArray("items") != null
+                                    }.getOrDefault(false)
+                                ) return candidate
+                                break
+                            }
+                        }
+                    }
+                    i++
+                }
+            }
+            from = text.indexOf("\"items\"", from + 1)
+        }
+        return null
     }
 
     /** GitHub contents 接口返回的是 base64 包裹的 JSON，这里统一解成纯文本 */
@@ -102,31 +163,99 @@ object RemoteConfig {
         }
     }
 
-    /** 拉取未读公告；失败返回空列表（静默） */
-    suspend fun fetchAnnouncements(c: Context): List<Announcement> = withContext(Dispatchers.IO) {
-        if (!announceEnabled(c)) return@withContext emptyList()
-        val readIds = c.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+    /** 用户填写的自定义源（每行一个，按顺序尝试） */
+    fun customSources(c: Context): List<String> =
+        (c.getSharedPreferences(PREF, Context.MODE_PRIVATE).getString(KEY_WORKER, "") ?: "")
+            .lines().map { it.trim() }.filter { it.isNotEmpty() }
+
+    fun workerUrl(c: Context): String = customSources(c).firstOrNull() ?: ""
+
+    fun setWorkerUrl(c: Context, url: String) =
+        c.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().putString(KEY_WORKER, url.trim()).apply()
+
+    /** 保存最近一次成功拉取的公告，供离线时展示 */
+    private fun saveCache(c: Context, list: List<Announcement>) {
+        val arr = org.json.JSONArray()
+        list.forEach { a ->
+            arr.put(JSONObject().apply {
+                put("id", a.id); put("title", a.title)
+                put("body", a.body); put("level", a.level); put("image", a.image)
+            })
+        }
+        c.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .edit().putString(KEY_CACHE, arr.toString()).apply()
+    }
+
+    /** 读取缓存（网络不可用时的兜底） */
+    fun cachedAnnouncements(c: Context): List<Announcement> {
+        val raw = c.getSharedPreferences(PREF, Context.MODE_PRIVATE).getString(KEY_CACHE, null)
+            ?: return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(raw)
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                Announcement(
+                    id = o.optString("id"),
+                    title = o.optString("title"),
+                    body = o.optString("body"),
+                    level = o.optString("level", "info"),
+                    image = o.optString("image", ""),
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    /** 公告编辑页地址（点「打开编辑页」跳这里） */
+    fun editUrl(c: Context): String =
+        c.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .getString(KEY_EDIT_URL, "")?.trim()?.ifBlank { null }
+            ?: "https://github.com/xgocgo/FreePlayToolBox/edit/master/announcements.json"
+
+    fun setEditUrl(c: Context, url: String) =
+        c.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().putString(KEY_EDIT_URL, url.trim()).apply()
+
+    fun readIds(c: Context): Set<String> =
+        c.getSharedPreferences(PREF, Context.MODE_PRIVATE)
             .getStringSet(KEY_READ_IDS, emptySet()) ?: emptySet()
 
-        for (u in announceUrls()) {
-            val text = httpGet(u, json = true)?.let { unwrapContent(it) } ?: continue
-            val items = runCatching {
+    /** 拉取公告；onlyUnread=true 时只返回未读（启动弹窗用），false 返回全部（首页常驻展示用） */
+    suspend fun fetchAnnouncements(c: Context, onlyUnread: Boolean = true): List<Announcement> = withContext(Dispatchers.IO) {
+        if (!announceEnabled(c)) return@withContext emptyList()
+        val read = readIds(c)
+
+        for (u in announceUrls(c)) {
+            var text = httpGet(u, json = true) ?: continue
+            text = unwrapContent(text)
+            if (!text.trimStart().startsWith("{")) {
+                text = extractJson(text) ?: continue
+            }
+            val all = runCatching {
                 val root = JSONObject(text)
                 val arr = root.optJSONArray("items") ?: return@runCatching emptyList<Announcement>()
                 (0 until arr.length()).mapNotNull { i ->
                     val o = arr.getJSONObject(i)
                     val id = o.optString("id", "")
-                    if (id.isBlank() || id in readIds) return@mapNotNull null
+                    if (id.isBlank()) return@mapNotNull null
                     Announcement(
                         id = id,
                         title = o.optString("title", "公告"),
                         body = o.optString("body", ""),
+                        level = o.optString("level", "info"),
+                        image = o.optString("image", ""),
                     )
                 }
-            }.getOrDefault(emptyList())
-            return@withContext items
+            }.getOrNull() ?: continue
+
+            // 成功拉到（哪怕是空列表）就整体覆盖缓存
+            saveCache(c, all)
+            return@withContext if (onlyUnread) all.filter { it.id !in read } else all
         }
-        emptyList()
+
+        // 所有源都失败：回落本地缓存，没网也能看到上次公告
+        val cached = cachedAnnouncements(c)
+        if (cached.isEmpty()) emptyList()
+        else if (onlyUnread) cached.filter { it.id !in read }
+        else cached
     }
 
     fun markRead(c: Context, ids: List<String>) {
