@@ -146,10 +146,19 @@ class NotifyListener : NotificationListenerService() {
          */
         fun applyNow(): Int = instance?.applyRulesNow() ?: 0
 
+        /**
+         * 恢复一条已被隐藏的通知：把当初取消掉的那条原样重新帖回通知栏。
+         * 帖不回去也不要紧，规则已经删了，应用下次发同样的通知就会显示。
+         */
+        fun restore(serialized: String): Boolean = instance?.restoreParked(serialized) ?: false
+
         private fun note(msg: String) {
             lastEvent = msg
         }
     }
+
+    /** 被取消掉的通知原件，rule.serialized -> 原始通知，用于「恢复」时帖回去 */
+    private val parked = LinkedHashMap<String, StatusBarNotification>()
 
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job + Dispatchers.Default)
@@ -176,6 +185,7 @@ class NotifyListener : NotificationListenerService() {
     override fun onListenerDisconnected() {
         connected = false
         items.clear()
+        parked.clear()
         note("监听已断开")
     }
 
@@ -220,6 +230,13 @@ class NotifyListener : NotificationListenerService() {
      */
     private fun hide(n: StatusBarNotification) {
         val key = n.key
+        // 记下命中的规则和原件，恢复时要原样帖回去
+        runCatching {
+            NotifyRules.load(this).filter { it.matches(n) }.forEach { r ->
+                parked[r.serialized] = n
+                if (parked.size > 40) parked.remove(parked.keys.first())
+            }
+        }
         cancelNotification(key)
         suppressed++
 
@@ -237,6 +254,25 @@ class NotifyListener : NotificationListenerService() {
                 note("无法取消 $key（常驻通知/前台服务）")
             }
         }
+    }
+
+    /**
+     * 恢复。
+     *
+     * 公开 API 里没有「替别的应用重新发通知」这条路（notifyAsPackage 是系统私有的），
+     * 被 cancel 掉的原件帖不回去。所以这里只做两件能做的事：
+     * 1. 如果这条通知其实还活着（常驻通知取消了但系统又拉起来过），立刻让它回到列表里；
+     * 2. 否则老实返回 false —— 规则已经删了，应用下次发同样的通知就会正常显示。
+     */
+    fun restoreParked(serialized: String): Boolean {
+        val sbn = parked.remove(serialized)
+        refresh()
+        val alive = sbn != null && stillActive(sbn.key)
+        if (alive && sbn != null) {
+            items[sbn.key] = toInfo(sbn)
+            note("已恢复 ${sbn.packageName}")
+        }
+        return alive
     }
 
     private fun stillActive(key: String): Boolean = try {

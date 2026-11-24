@@ -281,7 +281,11 @@ fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                         SmallPill("恢复", false) {
                             NotifyRules.remove(context, r)
                             rules = NotifyRules.load(context)
-                            toast = "已恢复「${r.label}」"
+                            toast = if (NotifyListener.restore(r.serialized)) {
+                                "已恢复「${r.label}」"
+                            } else {
+                                "规则已删；这条已经过期，应用下次发同样通知就会显示"
+                            }
                         }
                     }
                 }
