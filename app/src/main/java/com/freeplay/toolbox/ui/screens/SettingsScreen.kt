@@ -14,8 +14,11 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -33,6 +36,9 @@ import kotlinx.coroutines.withContext
 import com.freeplay.toolbox.core.AppState
 import com.freeplay.toolbox.core.CrashLogger
 import com.freeplay.toolbox.core.RemoteConfig
+import com.freeplay.toolbox.core.Shell
+import com.freeplay.toolbox.guard.GuardPrefs
+import com.freeplay.toolbox.guard.PowerGuardService
 import com.freeplay.toolbox.ui.components.CrashReportDialog
 import com.freeplay.toolbox.ui.components.HeroCard
 import com.freeplay.toolbox.ui.components.KsuListItem
@@ -59,6 +65,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     var downloading by remember { mutableStateOf(false) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var toast by remember { mutableStateOf<String?>(null) }
+    var guardOn by remember { mutableStateOf(GuardPrefs.enabled(context)) }
 
     androidx.compose.runtime.LaunchedEffect(toast) {
         toast?.let {
@@ -69,6 +76,25 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     androidx.compose.runtime.LaunchedEffect(Unit) {
         backups = com.freeplay.toolbox.data.ConfigBackup.listBackups()
     }
+
+    fun setGuard(on: Boolean) {
+        guardOn = on
+        GuardPrefs.setEnabled(context, on)
+        if (on) {
+            PowerGuardService.start(context)
+            scope.launch {
+                withContext(Dispatchers.IO) {
+                    // 忽略电池优化，别让系统把常驻服务掐了
+                    Shell.runAsync("dumpsys deviceidle whitelist +${context.packageName}")
+                }
+            }
+            toast = "已开启；建议顺手开无障碍，检测更及时"
+        } else {
+            PowerGuardService.stop(context)
+            toast = "已关闭"
+        }
+    }
+
 
     updateInfo?.let { info ->
         com.freeplay.toolbox.ui.components.UpdateDialog(
@@ -107,6 +133,55 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
+        }
+
+        SectionTitle("关机前检查")
+
+        KsuListItem(
+            icon = Icons.Filled.PowerSettingsNew,
+            title = "关机拦截检查",
+            subtitle = if (guardOn) {
+                "已开启：按电源键关机时先拦下来，检查未解冻的应用"
+            } else {
+                "关闭中。开启后长按电源键关机会被拦下并弹检查面板"
+            },
+            tint = if (guardOn) NeonGreen else NeonRed,
+            onClick = { setGuard(!guardOn) },
+            trailing = {
+                Switch(checked = guardOn, onCheckedChange = { setGuard(it) })
+            },
+        )
+
+        if (guardOn) {
+            KsuListItem(
+                icon = Icons.Filled.Accessibility,
+                title = "无障碍检测（可选）",
+                subtitle = "开了就在关机菜单弹出的瞬间触发；不开则每 0.7 秒轮询一次",
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS
+                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+                },
+            )
+            KsuListItem(
+                icon = Icons.Filled.Settings,
+                title = "自启动",
+                subtitle = "国产 ROM 需在系统里允许本应用自启动，否则开机后不会自动恢复服务",
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                android.net.Uri.parse("package:" + context.packageName),
+                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+                },
+            )
         }
 
         SectionTitle("日志")

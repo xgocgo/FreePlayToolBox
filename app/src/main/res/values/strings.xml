@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">玩机工具箱</string>
+    <string name="guard_accessibility_desc">只用来判断关机菜单有没有弹出来，好让关机前检查更及时。不读取页面内容。</string>
 </resources>
