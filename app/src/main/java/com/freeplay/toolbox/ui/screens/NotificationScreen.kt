@@ -79,6 +79,8 @@ fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     LaunchedEffect(Unit) {
         granted = NotifyListener.isGranted(context)
         rules = NotifyRules.load(context)
+        // 进页面就把已有规则重放一遍，看不见的残留通知清掉
+        if (granted) NotifyListener.applyNow()
     }
 
     val list = NotifyListener.items.values.sortedByDescending { it.time }
@@ -135,6 +137,77 @@ fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 }
             }
 
+            // ---------- 监听状态 ----------
+            if (granted) {
+                item {
+                    NeonCard {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    if (NotifyListener.connected) "监听器已连接" else "监听器未连接",
+                                    fontSize = 13.sp,
+                                    color = if (NotifyListener.connected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.error
+                                    },
+                                )
+                                Spacer(Modifier.weight(1f))
+                                SmallPill("重新应用", false) {
+                                    val hits = NotifyListener.applyNow()
+                                    toast = "重应用完成，命中 $hits 条"
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                SmallPill("重启监听", false, true) {
+                                    scope.launch {
+                                        val ok = withContext(Dispatchers.IO) {
+                                            NotifyListener.restart(context)
+                                        }
+                                        granted = NotifyListener.isGranted(context)
+                                        toast = if (ok) "监听器已重新绑定" else "绑定失败，点「复制诊断」"
+                                    }
+                                }
+                                SmallPill("复制诊断", false, true) {
+                                    runCatching {
+                                        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                            as android.content.ClipboardManager
+                                        cm.setPrimaryClip(
+                                            android.content.ClipData.newPlainText(
+                                                "notify_diag",
+                                                NotifyListener.diagnostics(context),
+                                            )
+                                        )
+                                    }
+                                    toast = "诊断已复制"
+                                }
+                            }
+                            if (!NotifyListener.connected) {
+                                Text(
+                                    "系统没有绑定监听器：先点「重启监听」，还是不行就点「复制诊断」发我",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                            Text(
+                                "收到 ${NotifyListener.received} · 已拦 ${NotifyListener.suppressed} · " +
+                                    "拦不掉 ${NotifyListener.stuck}",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (NotifyListener.lastEvent.isNotBlank()) {
+                                Text(
+                                    NotifyListener.lastEvent,
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // ---------- 活动通知 ----------
             item { SectionTitle("当前通知（${list.size}）") }
 
@@ -165,8 +238,13 @@ fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                             NotifyRule(n.pkg, n.id, n.tag, n.title.ifBlank { n.pkg }),
                         )
                         rules = NotifyRules.load(context)
-                        runCatching { }
-                        toast = "已隐藏「${n.title.ifBlank { n.pkg }}」，以后同样通知不再显示"
+                        // 规则只对「以后」生效，已经在通知栏里的这条要当场取消
+                        val hits = NotifyListener.applyNow()
+                        toast = if (hits > 0) {
+                            "已隐藏「${n.title.ifBlank { n.pkg }}」"
+                        } else {
+                            "规则已存，但通知栏没命中（监听器未连接？）"
+                        }
                     },
                     onBlockAll = {
                         scope.launch {
