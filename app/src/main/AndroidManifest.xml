@@ -37,6 +37,16 @@
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
         <service
+            android:name=".notify.NotifyListener"
+            android:exported="true"
+            android:label="玩机工具箱通知读取"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <service
             android:name=".overlay.OverlayService"
             android:exported="false"
             android:foregroundServiceType="specialUse">

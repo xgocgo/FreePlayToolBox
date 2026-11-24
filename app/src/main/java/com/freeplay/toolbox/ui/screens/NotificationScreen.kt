@@ -1,5 +1,6 @@
 package com.freeplay.toolbox.ui.screens
 
+import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
@@ -16,13 +17,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -34,30 +33,36 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freeplay.toolbox.core.AppState
-import com.freeplay.toolbox.data.ActiveNotification
 import com.freeplay.toolbox.data.NotificationRepository
+import com.freeplay.toolbox.data.NotifyRule
+import com.freeplay.toolbox.data.NotifyRules
+import com.freeplay.toolbox.notify.NotifyInfo
+import com.freeplay.toolbox.notify.NotifyListener
 import com.freeplay.toolbox.ui.components.NeonCard
 import com.freeplay.toolbox.ui.components.SectionTitle
 import com.freeplay.toolbox.ui.components.SmallPill
 import com.freeplay.toolbox.ui.theme.NeonCyan
+import com.freeplay.toolbox.ui.theme.NeonGreen
 import com.freeplay.toolbox.ui.theme.NeonRed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** 通知管理：活动通知列表、按包屏蔽、隐藏常驻通知、手动指定包名 */
+/**
+ * 通知管理。
+ *
+ * 两种粒度：
+ * - 精准隐藏：借通知使用权，按「包名+id+tag」取消某一条通知（会闪一下）
+ * - 整包关闭：撤销应用的通知权限，完全不弹（更彻底）
+ */
 @Composable
 fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var items by remember { mutableStateOf<List<ActiveNotification>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var canList by remember { mutableStateOf(true) }
-    var diag by remember { mutableStateOf("") }
-    val blocked = remember { mutableStateListOf<String>() }
+    var granted by remember { mutableStateOf(NotifyListener.isGranted(context)) }
+    var rules by remember { mutableStateOf(NotifyRules.load(context)) }
     var toast by remember { mutableStateOf<String?>(null) }
-
     var manualPkg by remember { mutableStateOf("") }
     var manualMode by remember { mutableStateOf<String?>(null) }
 
@@ -65,43 +70,18 @@ fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
     LaunchedEffect(toast) {
         toast?.let {
-            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
             toast = null
         }
     }
 
-    fun reload() {
-        scope.launch {
-            loading = true
-            canList = withContext(Dispatchers.IO) { NotificationRepository.canList() }
-            items = withContext(Dispatchers.IO) { NotificationRepository.active() }
-            loading = false
-            val pkgs = items.map { it.pkg }.distinct()
-            blocked.clear()
-            pkgs.forEach { p ->
-                if (withContext(Dispatchers.IO) { NotificationRepository.isBlocked(p) }) blocked.add(p)
-            }
-            diag = if (items.isEmpty()) {
-                if (canList) "dumpsys 有输出但未解析到活动通知"
-                else "该 ROM 的 dumpsys notification 不可读（常见于荣耀/华为），请用下方手动屏蔽"
-            } else ""
-        }
+    // 监听器授权状态可能被系统改，回前台时刷新
+    LaunchedEffect(Unit) {
+        granted = NotifyListener.isGranted(context)
+        rules = NotifyRules.load(context)
     }
-    LaunchedEffect(Unit) { reload() }
 
-    fun apply(pkg: String, allow: Boolean) {
-        scope.launch {
-            val err = withContext(Dispatchers.IO) {
-                NotificationRepository.setBlockedDetailed(pkg, !allow)
-            }
-            if (allow) blocked.remove(pkg) else if (!blocked.contains(pkg)) blocked.add(pkg)
-            toast = if (err.isEmpty()) {
-                if (allow) "已恢复 $pkg 的通知" else "已关闭 $pkg 的通知权限（含常驻）"
-            } else {
-                "未完全生效：$err"
-            }
-        }
-    }
+    val list = NotifyListener.items.values.sortedByDescending { it.time }
 
     Column(modifier.fillMaxSize()) {
         Row(
@@ -111,7 +91,7 @@ fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             TextButton(onClick = onBack) { Text("← 返回") }
             Text("通知管理", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = { reload() }) { Text("刷新", fontSize = 12.sp) }
+            Text("${list.size} 条", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
         LazyColumn(
@@ -119,49 +99,161 @@ fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (!AppState.shizukuGranted) {
+            // ---------- 授权 ----------
+            if (!granted) {
                 item {
-                    Text("Shizuku 未授权，无法修改", fontSize = 12.sp, color = NeonRed)
+                    NeonCard {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("需要通知使用权", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "用于读取通知列表并隐藏指定通知。不会上传任何通知内容。",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    enabled = AppState.shizukuGranted,
+                                    onClick = {
+                                        scope.launch {
+                                            val ok = withContext(Dispatchers.IO) { NotifyListener.grant(context) }
+                                            granted = NotifyListener.isGranted(context)
+                                            toast = if (ok) "已授权" else "自动授权失败，请手动开启"
+                                        }
+                                    },
+                                ) { Text("一键授权") }
+                                OutlinedButton(onClick = {
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        )
+                                    }
+                                }) { Text("去系统设置") }
+                            }
+                        }
+                    }
                 }
             }
 
-            // ---------- 手动屏蔽 ----------
-            item {
-                SectionTitle("按包名关闭通知（列表读不到时用这个）")
+            // ---------- 活动通知 ----------
+            item { SectionTitle("当前通知（${list.size}）") }
+
+            if (!granted) {
+                item {
+                    Text(
+                        "授权后才能读取通知列表",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else if (list.isEmpty()) {
+                item {
+                    Text(
+                        "当前没有通知",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
+
+            items(list, key = { it.key }) { n ->
+                NotifyRow(
+                    info = n,
+                    onHide = {
+                        NotifyRules.add(
+                            context,
+                            NotifyRule(n.pkg, n.id, n.tag, n.title.ifBlank { n.pkg }),
+                        )
+                        rules = NotifyRules.load(context)
+                        runCatching { }
+                        toast = "已隐藏「${n.title.ifBlank { n.pkg }}」，以后同样通知不再显示"
+                    },
+                    onBlockAll = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) { NotificationRepository.setBlocked(n.pkg, true) }
+                            toast = "已关闭 ${n.pkg.takeLast(24)} 的全部通知"
+                        }
+                    },
+                )
+            }
+
+            // ---------- 已隐藏规则 ----------
+            item { SectionTitle("已隐藏的通知（${rules.size}）") }
+            if (rules.isEmpty()) {
+                item {
+                    Text(
+                        "还没有隐藏任何通知。在上面点「隐藏这条」即可。",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            items(rules, key = { it.serialized }) { r ->
+                NeonCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(r.label, fontSize = 13.sp, maxLines = 1)
+                            Text(
+                                "${r.pkg} · id=${r.id}",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                        SmallPill("恢复", false) {
+                            NotifyRules.remove(context, r)
+                            rules = NotifyRules.load(context)
+                            toast = "已恢复「${r.label}」"
+                        }
+                    }
+                }
+            }
+
+            // ---------- 整包关闭 ----------
+            item { SectionTitle("整包关闭（更彻底）") }
             item {
                 NeonCard {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            "关闭后该应用无法发出任何通知，常驻通知（如「正在运行」）也会消失",
+                            "精准隐藏拦不住第一次出现，会闪一下。要让某个应用完全不弹通知，用这里关闭它的通知权限。",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         OutlinedTextField(
                             value = manualPkg,
                             onValueChange = { manualPkg = it.trim() },
-                            placeholder = { Text("如 com.android.systemui") },
+                            placeholder = { Text("包名，如 com.example.app") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
                         if (manualMode != null) {
-                            Text(
-                                "当前 appops 状态：$manualMode",
-                                fontSize = 11.sp,
-                                color = NeonCyan,
-                            )
+                            Text("当前状态：$manualMode", fontSize = 11.sp, color = NeonCyan)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
                                 enabled = manualPkg.isNotBlank() && AppState.shizukuGranted,
-                                onClick = { apply(manualPkg, false); manualMode = null },
+                                onClick = {
+                                    scope.launch {
+                                        val err = withContext(Dispatchers.IO) {
+                                            NotificationRepository.setBlockedDetailed(manualPkg, true)
+                                        }
+                                        toast = if (err.isEmpty()) "已关闭通知权限" else err
+                                    }
+                                },
                             ) { Text("关闭通知") }
                             OutlinedButton(
                                 enabled = manualPkg.isNotBlank() && AppState.shizukuGranted,
-                                onClick = { apply(manualPkg, true); manualMode = null },
-                            ) { Text("恢复通知") }
+                                onClick = {
+                                    scope.launch {
+                                        val err = withContext(Dispatchers.IO) {
+                                            NotificationRepository.setBlockedDetailed(manualPkg, false)
+                                        }
+                                        toast = if (err.isEmpty()) "已恢复通知权限" else err
+                                    }
+                                },
+                            ) { Text("恢复") }
                             OutlinedButton(
-                                enabled = manualPkg.isNotBlank() && AppState.shizukuGranted,
+                                enabled = manualPkg.isNotBlank(),
                                 onClick = {
                                     scope.launch {
                                         manualMode = withContext(Dispatchers.IO) {
@@ -175,62 +267,53 @@ fun NotificationScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 }
             }
 
-            // ---------- 当前通知 ----------
-            item {
-                SectionTitle("当前活动通知（${items.size}）")
-            }
-            if (loading) {
-                item {
-                    Text(
-                        "读取中…",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (!loading && items.isEmpty()) {
-                item {
-                    Text(
-                        diag.ifBlank { "当前没有活动通知" },
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
-            items(items, key = { it.pkg + it.title }) { n ->
-                NeonCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(n.title, fontSize = 14.sp, maxLines = 1)
-                                if (n.ongoing) {
-                                    Spacer(Modifier.padding(start = 6.dp))
-                                    SmallPill("常驻", true) {}
-                                }
-                            }
-                            Text(
-                                n.pkg,
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                            )
-                        }
-                        Switch(
-                            checked = !blocked.contains(n.pkg),
-                            enabled = AppState.shizukuGranted,
-                            onCheckedChange = { allow -> apply(n.pkg, allow) },
-                        )
-                    }
-                }
-            }
-
             item {
                 Text(
-                    "说明：本质是关闭该应用的通知权限。部分 ROM 会拒绝 shell 修改，此时点「查状态」可看到实际状态。",
+                    "说明：精准隐藏靠通知使用权取消，会闪一下；整包关闭是撤权限，完全不弹。两者可同时使用。",
                     fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NotifyRow(
+    info: NotifyInfo,
+    onHide: () -> Unit,
+    onBlockAll: () -> Unit,
+) {
+    NeonCard {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        info.title.ifBlank { "(无标题)" },
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                    )
+                    Text(
+                        info.text.ifBlank { "(无内容)" },
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                    )
+                }
+                if (info.ongoing) {
+                    SmallPill("常驻", true) {}
+                }
+            }
+            Text(
+                "${info.pkg} · id=${info.id}",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SmallPill("隐藏这条", false, true, onHide)
+                SmallPill("关闭该应用全部通知", false, true, onBlockAll)
             }
         }
     }
