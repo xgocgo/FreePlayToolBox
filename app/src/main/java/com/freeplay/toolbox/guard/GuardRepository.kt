@@ -33,18 +33,22 @@ data class GuardApp(
 object GuardRepository {
 
     private val pkgLine = Regex("""^\s*Package \[([\w.]+)\]""")
-    private val userLine = Regex(
-        """^\s*User (\d+): installed=(\w+) hidden=(\w+) suspended=(\w+).*enabled=(\d+)"""
-    )
+
+    /**
+     * `User 0:` 那行的字段顺序各版本不一样（通常还带 ceDataInode 前缀），
+     * 所以不按位置匹配，整行抓下来再逐个字段找。
+     */
+    private val userLine = Regex("""^\s*User (\d+): (.*)$""")
 
     private data class State(val hidden: Boolean, val suspended: Boolean, val enabled: Int)
 
-    suspend fun scan(context: Context): List<GuardApp> = withContext(Dispatchers.IO) {
+    data class ScanResult(val apps: List<GuardApp>, val packages: Int, val dumpChars: Int)
+
+    suspend fun scan(context: Context): ScanResult = withContext(Dispatchers.IO) {
         val dump = Shell.run("dumpsys package packages").out
-        if (dump.isBlank()) return@withContext emptyList()
-        val states = parse(dump)
+        val states = if (dump.isBlank()) emptyMap() else parse(dump)
         val pm = context.packageManager
-        states.mapNotNull { (pkg, st) ->
+        val hits = states.mapNotNull { (pkg, st) ->
             val mode = when {
                 st.suspended -> GuardMode.SUSPENDED
                 st.hidden -> GuardMode.HIDDEN
@@ -56,12 +60,43 @@ object GuardRepository {
             val ai = runCatching {
                 pm.getApplicationInfo(pkg, PackageManager.MATCH_UNINSTALLED_PACKAGES)
             }.getOrNull()
-            val label = ai?.let {
+            val label0 = ai?.let {
                 runCatching { pm.getApplicationLabel(it).toString() }.getOrNull()
             } ?: pkg
             val icon = ai?.let { runCatching { pm.getApplicationIcon(it) }.getOrNull() }
-            GuardApp(pkg, label, mode, icon)
+            GuardApp(pkg, label0, mode, icon)
         }.sortedWith(compareBy({ it.mode.ordinal }, { it.label }))
+
+        if (states.isEmpty()) {
+            // dumpsys 解析不出来（ROM 输出格式不同/命令没输出）时退回 PackageManager，
+            // 隐藏的包看不到，但暂停和停用能拿到
+            val fallback = pmFlags(context)
+            return@withContext ScanResult(fallback, fallback.size, dump.length)
+        }
+        ScanResult(hits, states.size, dump.length)
+    }
+
+    /** 兜底：直接从 ApplicationInfo 的标志位判断 */
+    private fun pmFlags(context: Context): List<GuardApp> {
+        val pm = context.packageManager
+        val out = mutableListOf<GuardApp>()
+        val pkgs = runCatching {
+            pm.getInstalledApplications(PackageManager.MATCH_UNINSTALLED_PACKAGES)
+        }.getOrDefault(emptyList())
+        for (ai in pkgs) {
+            if (ai.packageName == context.packageName) continue
+            val mode = when {
+                (ai.flags and android.content.pm.ApplicationInfo.FLAG_SUSPENDED) != 0 ->
+                    GuardMode.SUSPENDED
+                !ai.enabled -> GuardMode.DISABLED
+                else -> continue
+            }
+            val label = runCatching { pm.getApplicationLabel(ai).toString() }.getOrNull()
+                ?: ai.packageName
+            val icon = runCatching { pm.getApplicationIcon(ai) }.getOrNull()
+            out += GuardApp(ai.packageName, label, mode, icon)
+        }
+        return out.sortedWith(compareBy({ it.mode.ordinal }, { it.label }))
     }
 
     private fun parse(dump: String): Map<String, State> {
@@ -74,15 +109,21 @@ object GuardRepository {
                 continue
             }
             val u = userLine.find(line) ?: continue
-            val pkg = current ?: continue
             if (u.groupValues[1] != "0") continue
-            out[pkg] = State(
-                hidden = u.groupValues[3].equals("true", true),
-                suspended = u.groupValues[4].equals("true", true),
-                enabled = u.groupValues[5].toIntOrNull() ?: 0,
-            )
+            val pkg = current ?: continue
+            val st = parseUserState(u.groupValues[2]) ?: continue
+            out[pkg] = st
         }
         return out
+    }
+
+    private fun parseUserState(rest: String): State? {
+        fun flag(key: String): Boolean =
+            Regex("""\b""" + key + """=(\w+)""").find(rest)
+                ?.groupValues?.get(1)?.equals("true", ignoreCase = true) == true
+        val enabled = Regex("""\benabled=(\d+)""").find(rest)
+            ?.groupValues?.get(1)?.toIntOrNull() ?: return null
+        return State(flag("hidden"), flag("suspended"), enabled)
     }
 
     /** 解冻/启用/取消隐藏，返回 (成功数, 失败的应用名) */

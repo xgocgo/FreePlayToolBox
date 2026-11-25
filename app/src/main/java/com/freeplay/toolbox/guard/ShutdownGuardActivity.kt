@@ -82,10 +82,16 @@ private fun GuardPanel(onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     var scanning by remember { mutableStateOf(true) }
     var apps by remember { mutableStateOf<List<GuardApp>>(emptyList()) }
+    var scanInfo by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        apps = withContext(Dispatchers.IO) { GuardRepository.scan(context) }
+        val r = withContext(Dispatchers.IO) { GuardRepository.scan(context) }
+        apps = r.apps
+        scanInfo = buildString {
+            append("共扫描 ${r.packages} 个包")
+            if (r.dumpChars == 0) append("，dumpsys 无输出")
+        }
         scanning = false
     }
 
@@ -136,15 +142,25 @@ private fun GuardPanel(onClose: () -> Unit) {
 
                     apps.isEmpty() -> {
                         Text(
-                            "没查到未解冻的应用。请检查还有没有未解冻的软件。",
+                            if (!AppState.shizukuGranted) {
+                                "Shizuku 未连接，查不了。请检查还有没有未解冻的软件。"
+                            } else {
+                                "没查到未解冻的应用。请检查还有没有未解冻的软件。"
+                            },
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            scanInfo,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp),
                         )
                     }
 
                     else -> {
                         Text(
-                            "有 ${apps.size} 个应用还处于非正常状态，重启后它们不会自己恢复：",
+                            "有 ${apps.size} 个应用还处于非正常状态，重启后它们不会自己恢复（$scanInfo）：",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
