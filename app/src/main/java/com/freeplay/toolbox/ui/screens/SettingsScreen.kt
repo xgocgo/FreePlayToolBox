@@ -12,6 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PowerSettingsNew
@@ -76,6 +77,45 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     androidx.compose.runtime.LaunchedEffect(Unit) {
         backups = com.freeplay.toolbox.data.ConfigBackup.listBackups()
     }
+
+    /** 把当前安装的 APK 复制到缓存再走 FileProvider 分享出去 */
+    fun shareApk() {
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    val src = java.io.File(context.applicationInfo.sourceDir)
+                    if (!src.exists()) return@runCatching false
+                    val dir = java.io.File(context.cacheDir, "apk")
+                    dir.listFiles()?.forEach { it.delete() }
+                    dir.mkdirs()
+                    val name = "玩机工具箱-${com.freeplay.toolbox.BuildConfig.VERSION_NAME}.apk"
+                    val dst = java.io.File(dir, name)
+                    src.copyTo(dst, overwrite = true)
+                    val uri = androidx.core.content.FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        dst,
+                    )
+                    val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "application/vnd.android.package-archive"
+                        putExtra(android.content.Intent.EXTRA_STREAM, uri as android.os.Parcelable)
+                        putExtra(
+                            android.content.Intent.EXTRA_SUBJECT,
+                            "玩机工具箱 v${com.freeplay.toolbox.BuildConfig.VERSION_NAME}",
+                        )
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(
+                        android.content.Intent.createChooser(send, "分享安装包")
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    true
+                }.getOrDefault(false)
+            }
+            if (!ok) toast = "分享失败，检查存储空间"
+        }
+    }
+
 
     fun setGuard(on: Boolean) {
         guardOn = on
@@ -312,6 +352,13 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             title = "版本",
             subtitle = "v${com.freeplay.toolbox.BuildConfig.VERSION_NAME} (${com.freeplay.toolbox.BuildConfig.VERSION_CODE}) · 免 root，基于 Shizuku / Dhizuku",
             tint = NeonCyan,
+        )
+        KsuListItem(
+            icon = Icons.Filled.Share,
+            title = "分享安装包",
+            subtitle = "把当前版本 APK 直接发给任意应用或好友",
+            tint = NeonGreen,
+            onClick = { shareApk() },
         )
         KsuListItem(
             icon = Icons.Filled.Info,
